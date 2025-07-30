@@ -1,8 +1,3 @@
-variable "SCAN_TYPE" {
-  type        = string
-  description = "Registry scan type `BASIC` or `ENHANCED`"
-  default     = "BASIC"
-}
 variable "SCAN_FREQUENCY" {
   type        = string
   description = "Registry scan frequency SCAN_ON_PUSH, CONTINUOUS_SCAN, or MANUAL"
@@ -25,4 +20,10 @@ variable "REPO_SCAN_ON_PUSH" {
   type        = bool
   description = "Toggles Scan on push on repos Lambda creates."
   default     = true
+}
+
+variable "PYTHON_RUNTIME_VERSION" {
+  type        = string
+  description = "Python runtime version for the Lambda function. Default is `3.13`."
+  default     = "3.13"
 }

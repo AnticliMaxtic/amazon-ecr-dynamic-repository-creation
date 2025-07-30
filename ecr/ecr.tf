@@ -6,7 +6,7 @@ resource "aws_lambda_function" "this" {
   description      = "create ecr repository."
   role             = aws_iam_role.this.arn
   handler          = "handler.run"
-  runtime          = "python3.9"
+  runtime          = "python${ var.PYTHON_RUNTIME_VERSION }"
   source_code_hash = data.archive_file.this.output_base64sha256
   timeout          = 120
 
