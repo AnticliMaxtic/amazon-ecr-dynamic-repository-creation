@@ -5,5 +5,5 @@ data "aws_caller_identity" "current" {}
 data "archive_file" "this" {
   type        = "zip"
   source_dir  = "${path.module}/files/"
-  output_path = "${path.module}/files/python.zip"
+  output_path = "${path.module}/python.zip"
 }
