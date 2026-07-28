@@ -1,0 +1,105 @@
+# Keep this fork's default branch up to date with aws-samples upstream.
+# Retries with exponential backoff when the GitHub API is overloaded or rate-limited.
+name: Sync Upstream
+
+on:
+  schedule:
+    # Daily at 06:00 UTC
+    - cron: "0 6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: sync-upstream
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    name: Sync fork with upstream
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Sync default branch with upstream
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Parent of this fork (aws-samples/amazon-ecr-dynamic-repository-creation)
+          UPSTREAM_REPO: aws-samples/amazon-ecr-dynamic-repository-creation
+          BRANCH: ${{ github.event.repository.default_branch }}
+          MAX_ATTEMPTS: "5"
+          BASE_SLEEP_SECONDS: "30"
+          MAX_SLEEP_SECONDS: "300"
+        run: |
+          set -uo pipefail
+
+          is_retryable() {
+            local http_code="$1"
+            local body="$2"
+
+            case "${http_code}" in
+              429|500|502|503|504) return 0 ;;
+              ""|"000") return 0 ;;
+            esac
+
+            # Secondary rate limits / transient API messaging often arrive as 403
+            if echo "${body}" | grep -qiE \
+              'rate limit|secondary rate|API rate|try again later|overloaded|timeout|temporarily unavailable|Bad Gateway|Service Unavailable|Gateway Timeout|abuse detection'; then
+              return 0
+            fi
+
+            return 1
+          }
+
+          attempt=1
+          sleep_seconds="${BASE_SLEEP_SECONDS}"
+
+          while [ "${attempt}" -le "${MAX_ATTEMPTS}" ]; do
+            echo "::group::Attempt ${attempt}/${MAX_ATTEMPTS} — merge upstream into '${BRANCH}'"
+            tmp="$(mktemp)"
+
+            set +e
+            # Official fork-sync API: fast-forward this repo's branch from its parent.
+            # https://docs.github.com/en/rest/branches/branches#sync-a-fork-branch-with-the-upstream-repository
+            gh api \
+              --method POST \
+              "repos/${GITHUB_REPOSITORY}/merge-upstream" \
+              -f "branch=${BRANCH}" \
+              --include >"${tmp}" 2>&1
+            status=$?
+            set -e
+
+            body="$(cat "${tmp}")"
+            http_code="$(printf '%s\n' "${body}" | awk 'BEGIN{c=""} /^HTTP\//{c=$2} END{print c}')"
+            echo "${body}"
+            echo "::endgroup::"
+
+            if [ "${status}" -eq 0 ]; then
+              echo "Successfully synced with upstream ${UPSTREAM_REPO} (HTTP ${http_code:-200})."
+              exit 0
+            fi
+
+            # Diverged history or validation errors need a human; do not spin on them.
+            if [ "${http_code}" = "409" ] || [ "${http_code}" = "422" ]; then
+              echo "::error::Unable to fast-forward sync with upstream (HTTP ${http_code}). The branches may have diverged — resolve manually."
+              exit 1
+            fi
+
+            if [ "${attempt}" -ge "${MAX_ATTEMPTS}" ]; then
+              echo "::error::Failed to sync with upstream after ${MAX_ATTEMPTS} attempts (HTTP ${http_code:-unknown})."
+              exit 1
+            fi
+
+            if is_retryable "${http_code}" "${body}"; then
+              echo "Transient GitHub API failure (HTTP ${http_code:-unknown}). Sleeping ${sleep_seconds}s before retry..."
+              sleep "${sleep_seconds}"
+              sleep_seconds=$((sleep_seconds * 2))
+              if [ "${sleep_seconds}" -gt "${MAX_SLEEP_SECONDS}" ]; then
+                sleep_seconds="${MAX_SLEEP_SECONDS}"
+              fi
+              attempt=$((attempt + 1))
+            else
+              echo "::error::Non-retryable failure syncing with upstream (HTTP ${http_code:-unknown})."
+              exit 1
+            fi
+          done
